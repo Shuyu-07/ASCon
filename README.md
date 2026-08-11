@@ -9,8 +9,6 @@ ASCon studies two representative MAS failure-attribution settings:
 
 Accordingly, ASCon uses two prediction heads for these two settings.
 
-## Note on Dataset Availability
-
 As we do not hold the rights to publicly release the `TracerTraj` dataset, we use Task 2 on Aegis-Bench as the example here to demonstrate how to train and use the ASCon model.
 
 ### (1) Run the preprocessing script to build encoded `pt` files

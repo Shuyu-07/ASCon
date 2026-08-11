@@ -125,3 +125,19 @@ For example:
 - `ASCon/FaultProbabilityFile/Task1-WWtest-Algorithm_ranked_probs.json`
 - `ASCon/FaultProbabilityFile/Task1-WWtest-Handcraft_ranked_probs.json`
 - `ASCon/FaultProbabilityFile/Task2-WWtest-Agent-fault-probs.json`
+---
+
+## 📝 Citation
+
+If you find ASCon useful in your research, please consider citing our paper:
+
+```bibtex
+@inproceedings{TODO,
+  title     = {ASCon: A Direction-Aware Reciprocal Agent--Step Contextualization Model for Failure Attribution in Multi-Agent Systems},
+  author    = {TODO},
+  booktitle = {TODO},
+  year      = {TODO}
+}
+```
+
+---

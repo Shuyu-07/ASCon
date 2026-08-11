@@ -116,7 +116,7 @@ Task 2 results are written under:
 
 ## Reference Probability Files
 
-We also provide several reference probability files in:
+We also provide several reference probability samples in:
 
 - `ASCon/FaultProbabilityFile`
 

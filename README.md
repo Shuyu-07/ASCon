@@ -2,12 +2,10 @@
 
 This directory contains the public implementation of **ASCon: A Direction-Aware Reciprocal Agent-Step Contextualization Model for Failure Attribution in Multi-Agent Systems**.
 
-ASCon studies two representative MAS failure-attribution settings:
+ASCon is conducted on the following two representative MAS failure-attribution settings:
 
 - **Task 1: root-fault attribution**, which identifies one root responsible agent and one key failure step.
 - **Task 2: failure-mode attribution**, which identifies faulty agents and their corresponding failure modes.
-
-Accordingly, ASCon uses two prediction heads for these two settings.
 
 As we do not hold the rights to publicly release the `TracerTraj` dataset, we use Task 2 on Aegis-Bench as the example here to demonstrate how to train and use the ASCon model.
 
@@ -50,18 +48,53 @@ The trained best model is saved to:
 
 - `ASCon/results/task2_aegis_bench_local/seed_42/best.pt`
 
-### (3) Use the trained model predictions to enhance the LLM
+### (3) Use ASCon predictions to enhance LLM-based attribution
 
-This step has two sub-steps:
+ASCon-enhanced LLM evaluation covers both attribution settings:
 
-1. use the trained ASCon Task 2 model to generate the auxiliary agent fault-probability file;
-2. use that probability file to enhance the LLM input.
+- **Task 1: root-fault attribution**
+  - ASCon ranked fault candidates are used to enhance root-cause localization on `WhoWhen-RootTest`.
+  - For the SDBL-style setting implemented here, the LLM receives ASCon-ranked fault evidence from:
+    - `ASCon/FaultProbabilityFile/Task1-WWtest-Algorithm_ranked_probs.json`
+    - `ASCon/FaultProbabilityFile/Task1-WWtest-Handcraft_ranked_probs.json`
+  - The supported prompt modes are:
+    - `single`: no ASCon auxiliary evidence
+    - `ascon_SDBL_top`: append ASCon top-ranked step / agent candidates as reference content. Used for ASCon-enhanced-SDBL method.
+    - `ascon_llm_prob_history`: append ASCon step fault probabilities directly into the conversation history
 
-Run:
+- **Task 2: failure-mode attribution**
+  - The trained Task 2 model first generates an auxiliary agent fault profile for `WWtest`.
+  - The profile contains each agent's fault probability and top-five candidate fault types.
+  - This profile is then appended to the LLM input for failure-mode attribution.
+
+**Task 1 example**
 
 ```bash
 set OPENAI_API_KEY=your_key_here
-python -m ASCon.ASConEnhancedLLM ^
+python -m ASCon.ASConEnhancedLLM task1 ^
+  --model gpt-4o-mini ^
+  --prompt-kind ascon_llm_prob_history ^
+  --workers 4
+```
+
+Task 1 reads:
+
+- `ASCon/WhoWhen-RootTest/Algorithm-Generated`
+- `ASCon/WhoWhen-RootTest/Hand-Craft`
+- `ASCon/FaultProbabilityFile/Task1-WWtest-Algorithm_ranked_probs.json`
+- `ASCon/FaultProbabilityFile/Task1-WWtest-Handcraft_ranked_probs.json`
+
+Task 1 results are written under:
+
+- `ASCon/results/task1_root_enhanced_llm/<dataset>/<provider>/<model>/records.jsonl`
+- `ASCon/results/task1_root_enhanced_llm/<dataset>/<provider>/<model>/summary.json`
+- `ASCon/results/task1_root_enhanced_llm/summary.json`
+
+**Task 2 example**
+
+```bash
+set OPENAI_API_KEY=your_key_here
+python -m ASCon.ASConEnhancedLLM task2 ^
   --input_json ASCon/Aegis-Bench/WWtest_with_agent_error_labels.json ^
   --input_pt ASCon/Aegis-Bench/WWtest_with_agent_error_labels.pt ^
   --checkpoint ASCon/results/task2_aegis_bench_local/seed_42/best.pt ^
@@ -74,29 +107,16 @@ This command first generates:
 
 - `ASCon/FaultProbabilityFile/Task2-WWtest-Agent-fault-probs.json`
 
-and then uses this probability file to enhance the LLM reasoning on `WWtest`.
+and then uses this profile to enhance the LLM reasoning on `WWtest`.
 
-Example with `deepseek-v4-pro`:
-
-```bash
-set DEEPSEEK_API_KEY=your_key_here
-python -m ASCon.ASConEnhancedLLM ^
-  --input_json ASCon/Aegis-Bench/WWtest_with_agent_error_labels.json ^
-  --input_pt ASCon/Aegis-Bench/WWtest_with_agent_error_labels.pt ^
-  --checkpoint ASCon/results/task2_aegis_bench_local/seed_42/best.pt ^
-  --aux_output_json ASCon/FaultProbabilityFile/Task2-WWtest-Agent-fault-probs.json ^
-  --model deepseek-v4-pro ^
-  --workers 4
-```
-
-The LLM evaluation results are written under:
+Task 2 results are written under:
 
 - `ASCon/results/task2_aegis_enhanced_llm/<model>/records.jsonl`
 - `ASCon/results/task2_aegis_enhanced_llm/<model>/summary.json`
 
 ## Reference Probability Files
 
-We also provide several reference probability samples in:
+We also provide several reference probability files in:
 
 - `ASCon/FaultProbabilityFile`
 
@@ -105,11 +125,3 @@ For example:
 - `ASCon/FaultProbabilityFile/Task1-WWtest-Algorithm_ranked_probs.json`
 - `ASCon/FaultProbabilityFile/Task1-WWtest-Handcraft_ranked_probs.json`
 - `ASCon/FaultProbabilityFile/Task2-WWtest-Agent-fault-probs.json`
-
-## Task 2 Metrics
-
-Task 2 reports:
-
-- `faulty_agent`: micro/macro F1
-- `error_mode`: micro/macro F1
-- `agent_error_pair`: micro/macro F1

@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import re
+import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -18,6 +19,13 @@ from openai import OpenAI
 from ASCon.evaluate import AEGIS_ERROR_TYPES
 from ASCon.metrics import compute_aegis_fault_metrics_from_faulty_agents_pairs
 from ASCon.models import Task2ASCon
+from ASCon.prompt_template import (
+    ASCON_ENHANCED_AEGIS_COT_PROMPT,
+    build_chat_content,
+    build_chat_content_with_probability,
+    build_reference_content,
+    build_task1_prompt,
+)
 from ASCon.utils import load_pt
 
 ROOT = Path(__file__).resolve().parent
@@ -26,87 +34,15 @@ DEFAULT_INPUT_PT = ROOT / "Aegis-Bench" / "WWtest_with_agent_error_labels.pt"
 DEFAULT_CHECKPOINT = ROOT / "results" / "task2_aegis_bench_local" / "seed_42" / "best.pt"
 DEFAULT_OUTPUT_DIR = ROOT / "results" / "task2_aegis_enhanced_llm"
 DEFAULT_AUX_OUTPUT_JSON = ROOT / "FaultProbabilityFile" / "Task2-WWtest-Agent-fault-probs.json"
-
-ASCON_ENHANCED_AEGIS_COT_PROMPT = """## ROLE AND GOAL
-You are a meticulous Multi-Agent System (MAS) Quality Assurance analyst. Your sole purpose is to analyze conversation logs to identify and categorize agent errors based on a strict set of definitions.
-
-## ERROR DEFINITIONS WITH EXAMPLES
-You MUST use the exact error codes provided below.
-
-### Functional Mistakes (FM-1.x - Task Execution Errors):
-- FM-1.1: **Task specification deviation** - Agent deviates from specified task requirements (e.g., was asked to write code in Python, but used JavaScript).
-- FM-1.2: **Role specification deviation** - Agent acts outside its designated role (e.g., a 'CodeWriter' agent starts criticizing other agents' work, which is the 'Critic's' role).
-- FM-1.3: **Add redundant steps** - Agent adds unnecessary or duplicate steps (e.g., imports a library that was already imported in a previous step).
-- FM-1.4: **Remove conversation history** - Agent ignores or removes important context from previous turns (e.g., ignores a user's correction from the previous message).
-- FM-1.5: **Remove termination conditions** - Agent fails to define proper stopping criteria, leading to loops or unfinished tasks (e.g., writes a recursive function with no base case).
-
-### Functional Mistakes (FM-2.x - Communication & Coordination Errors):
-- FM-2.1: **Repeat handled tasks** - Agent redundantly handles already completed tasks (e.g., re-writes a piece of code that was already finalized and approved).
-- FM-2.2: **Make request ambiguous** - Agent provides unclear or confusing instructions to other agents (e.g., asks another agent to "handle the data" without specifying how).
-- FM-2.3: **Deviate from main goal** - Agent pursues objectives unrelated to the main task (e.g., starts discussing the history of programming languages in the middle of a coding task).
-- FM-2.4: **Hide important information** - Agent withholds crucial information needed by other agents (e.g., knows a library has a bug but doesn't mention it).
-- FM-2.5: **Ignore other agents** - Agent fails to consider input, corrections, or questions from other agents.
-- FM-2.6: **Inconsistent reasoning** - Agent's logic contradicts its own previous statements (e.g., in step 2 agent says 'option A is best', but in step 4 says 'option A is a bad choice' without new information).
-
-### Functional Mistakes (FM-3.x - Quality & Verification Errors):
-- FM-3.1: **Premature termination** - Agent stops or declares the task complete before all requirements are met.
-- FM-3.2: **Remove verification steps** - Agent skips necessary validation or testing steps (e.g., writes code but doesn't write any unit tests for it).
-- FM-3.3: **Incorrect verification** - Agent performs flawed or wrong verification (e.g., writes a test that doesn't actually check for the correct condition).
-
-## ANALYSIS WORKFLOW
-Please follow these steps carefully:
-
-### Step 1: Agent Summary
-First, analyze and summarize what each agent has done throughout the conversation:
-- List each agent that appears in the conversation
-- For each agent, summarize their main actions, decisions, and contributions
-- Note any patterns or recurring behaviors
-
-### Step 2: Error Analysis
-For each agent identified in Step 1:
-- Carefully examine their actions against each error definition
-- Look for violations of task requirements, role boundaries, communication issues, or quality problems
-- Note any potential errors with specific reasoning
-
-### Step 3: Final Judgment
-Based on your analysis in Steps 1 and 2:
-- Determine which agents (if any) committed errors
-- Assign the appropriate error code(s) to each faulty agent
-- Ensure agent names match exactly as they appear in the conversation log
-
-### AUXILIARY AGENT FAULT PROFILE
-Each conversation will be followed by an auxiliary fault profile for every agent, including:
-- auxiliary fault probability: the probability that the agent is faulty in this task;
-- top 5 likely fault types: the five most likely fault types predicted for that agent.
-Please use this auxiliary information to assist your judgment of faulty agents and fault types.
-
-## REQUIRED OUTPUT FORMAT
-Your response must contain:
-
-1. **Agent Summary**: A brief analysis of what each agent did
-2. **Error Analysis**: Your reasoning for identifying errors
-3. **Final Answer**: A valid JSON object with your conclusions
-
-**JSON Format:**
-{{"faulty_agents": [{{"agent_name": "XXX", "error_type": "FM-X.X"}}]}}
-
-**Examples:**
-- Multiple Errors: {{"faulty_agents": [{{"agent_name": "XXX1", "error_type": "FM-1.1"}}, {{"agent_name": "XXX2", "error_type": "FM-3.2"}}, {{"agent_name": "XXX3", "error_type": "FM-2.5"}}]}}
-- No Errors: {{"faulty_agents": []}}
-
-**Important:** Make sure the agent names you output exactly match those in the conversation log. Do not fabricate names.
-
-## CONVERSATION TO ANALYZE:
-\"\"\"
-{conversation_text}
-\"\"\"
-
-## YOUR ANALYSIS:
-"""
+DEFAULT_TASK1_OUTPUT_DIR = ROOT / "results" / "task1_root_enhanced_llm"
+DEFAULT_TASK1_ALGORITHM_DIR = ROOT / "WhoWhen-RootTest" / "Algorithm-Generated"
+DEFAULT_TASK1_HANDCRAFT_DIR = ROOT / "WhoWhen-RootTest" / "Hand-Craft"
+DEFAULT_TASK1_ALGORITHM_PROBS = ROOT / "FaultProbabilityFile" / "Task1-WWtest-Algorithm_ranked_probs.json"
+DEFAULT_TASK1_HANDCRAFT_PROBS = ROOT / "FaultProbabilityFile" / "Task1-WWtest-Handcraft_ranked_probs.json"
 
 
 def load_json(path: Path) -> Any:
-    return json.loads(path.read_text(encoding="utf-8"))
+    return json.loads(path.read_text(encoding="utf-8-sig"))
 
 
 def load_label_map(path: Path) -> Dict[int, str]:
@@ -189,6 +125,70 @@ def parse_faulty_agents_from_response(text: str) -> List[Dict[str, str]]:
         if result is not None:
             return result
     return []
+
+
+def parse_optional_int(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    text = str(value).strip()
+    if text.lower() in {"", "null", "none"}:
+        return None
+    try:
+        return int(float(text))
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_root_fault_response(raw_response: str) -> Dict[str, Any]:
+    if not raw_response:
+        return {}
+
+    payload: Dict[str, Any] = {}
+    patterns = {
+        "fault_agent": [
+            r"(?im)^\s*Agent role\s*:\s*(.+?)\s*$",
+            r"(?im)^\s*Agent\s*:\s*(.+?)\s*$",
+            r"(?im)\"agent_name\"\s*:\s*\"([^\"]+)\"",
+        ],
+        "fault_step": [
+            r"(?im)^\s*Step Number\s*:\s*(.+?)\s*$",
+            r"(?im)^\s*Step\s*:\s*(.+?)\s*$",
+            r"(?im)\"step_number\"\s*:\s*([0-9]+|null|none)",
+        ],
+        "reason": [
+            r"(?ims)^\s*Reason for Mistake\s*:\s*(.+)\s*$",
+            r"(?ims)^\s*Reason\s*:\s*(.+)\s*$",
+            r"(?ims)\"reason_for_mistake\"\s*:\s*\"([^\"]*)\"",
+        ],
+    }
+    for key, regexes in patterns.items():
+        for regex in regexes:
+            match = re.search(regex, raw_response)
+            if match:
+                payload[key] = match.group(1).strip()
+                break
+    step_value = parse_optional_int(payload.get("fault_step"))
+    agent_value = payload.get("fault_agent")
+    reason_value = payload.get("reason")
+    return {
+        "fault_agent": None if agent_value is None else str(agent_value).strip(),
+        "fault_step": step_value,
+        "reason": "" if reason_value is None else str(reason_value).strip(),
+    }
+
+
+def normalize_root_prediction(parsed: Dict[str, Any]) -> Dict[str, Any]:
+    fault_agent = parsed.get("fault_agent")
+    fault_step = parsed.get("fault_step")
+    return {
+        "fault_detected": fault_agent is not None or fault_step is not None,
+        "fault_agent": None if fault_agent in {"", "none", "null"} else fault_agent,
+        "fault_step": parse_optional_int(fault_step),
+    }
 
 
 def build_conversation_text(row: Dict[str, Any], auxiliary_agents: List[Dict[str, Any]]) -> str:
@@ -335,7 +335,13 @@ def build_model_spec(model_name: str) -> ModelSpec:
     if model_name == "gpt-4o-mini":
         return ModelSpec("openai", model_name, os.environ["OPENAI_API_KEY"])
     if model_name == "deepseek-v4-pro":
-        return ModelSpec("deepseek", model_name, os.environ["DEEPSEEK_API_KEY"], disable_thinking=True)
+        return ModelSpec(
+            "deepseek",
+            model_name,
+            os.environ["DEEPSEEK_API_KEY"],
+            base_url="https://api.deepseek.com",
+            disable_thinking=True,
+        )
     if model_name.startswith("gemini"):
         return ModelSpec("gemini", model_name, os.environ["GEMINI_API_KEY"])
     if model_name.startswith("qwen"):
@@ -513,7 +519,210 @@ def evaluate_records(
     return summary
 
 
-def main() -> None:
+def load_task1_directory_samples(dataset_dir: Path) -> List[Dict[str, Any]]:
+    samples: List[Dict[str, Any]] = []
+    json_paths = sorted(dataset_dir.glob("*.json"), key=lambda path: int(path.stem) if path.stem.isdigit() else path.stem)
+    for index, path in enumerate(json_paths):
+        sample = load_json(path)
+        sample["__file_name__"] = path.name
+        sample["__line_no__"] = index + 1
+        samples.append(sample)
+    return samples
+
+
+def load_task1_ranked_prob_records(algorithm_path: Path, handcrafted_path: Path) -> Dict[str, Dict[str, Dict[str, Any]]]:
+    records_by_dataset: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    for dataset_name, path in (
+        ("algorithm", algorithm_path),
+        ("handcrafted", handcrafted_path),
+    ):
+        payload = load_json(path)
+        records_by_file: Dict[str, Dict[str, Any]] = {}
+        for record in payload.get("records", []):
+            file_name = Path(str(record.get("file", ""))).name
+            if file_name:
+                records_by_file[file_name] = record
+        records_by_dataset[dataset_name] = records_by_file
+    return records_by_dataset
+
+
+def evaluate_task1_dataset(
+    dataset_name: str,
+    dataset_dir: Path,
+    top_n: int,
+    agent_top_n: int,
+    include_agents: bool,
+    prompt_kind: str,
+    reference_format: str,
+    ranked_records: Dict[str, Dict[str, Dict[str, Any]]],
+    output_dir: Path,
+    spec: ModelSpec,
+    workers: int,
+) -> Dict[str, Any]:
+    samples = load_task1_directory_samples(dataset_dir)
+    dataset_out_dir = output_dir / dataset_name / spec.provider / spec.model
+    dataset_out_dir.mkdir(parents=True, exist_ok=True)
+    records_path = dataset_out_dir / "records.jsonl"
+    summary_path = dataset_out_dir / "summary.json"
+
+    existing: Dict[str, Dict[str, Any]] = {}
+    if records_path.exists():
+        for line in records_path.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                record = json.loads(line)
+                existing[record["record_key"]] = record
+
+    runner_getter = make_runner_factory(spec)
+    write_lock = threading.Lock()
+
+    def process_sample(sample: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        file_name = sample["__file_name__"]
+        if file_name in existing:
+            return None
+        ranked_record = ranked_records[dataset_name][file_name]
+        chat_content = build_chat_content(sample.get("history", []))
+        chat_content_with_probability = build_chat_content_with_probability(sample.get("history", []), ranked_record)
+        reference_content = build_reference_content(
+            ranked_record,
+            top_n=top_n,
+            agent_top_n=agent_top_n,
+            include_agents=include_agents,
+            reference_format=reference_format,
+            history=sample.get("history", []),
+        )
+        problem = str(sample.get("question", "")).strip()
+
+        raw_response = ""
+        parse_error = None
+        parsed: Dict[str, Any] = {}
+        try:
+            prompt = build_task1_prompt(
+                problem=problem,
+                chat_content=chat_content,
+                reference_content=reference_content,
+                prompt_kind=prompt_kind,
+                chat_content_with_probability=chat_content_with_probability,
+            )
+            raw_response = call_llm(runner_getter(), prompt=prompt, temperature=0.0) or ""
+            parsed = parse_root_fault_response(raw_response)
+        except Exception as exc:
+            parse_error = f"{type(exc).__name__}: {exc}"
+
+        normalized = normalize_root_prediction(parsed)
+        return {
+            "record_key": file_name,
+            "line_no": sample["__line_no__"],
+            "file": file_name,
+            "dataset_name": dataset_name,
+            "problem": problem,
+            "reference_content": json.loads(reference_content),
+            "chat_content": json.loads(chat_content),
+            "chat_content_with_probability": json.loads(chat_content_with_probability),
+            "raw_response": raw_response,
+            "parsed_response": parsed if parsed else None,
+            "normalized_prediction": normalized,
+            "pred_fault_detected": normalized["fault_detected"],
+            "pred_fault_step": normalized["fault_step"],
+            "pred_fault_agent": normalized["fault_agent"],
+            "gold_fault_step": parse_optional_int(sample.get("mistake_step")),
+            "gold_fault_agent": None if sample.get("mistake_agent") is None else str(sample.get("mistake_agent")),
+            "parse_error": parse_error,
+        }
+
+    pending_samples = [sample for sample in samples if sample["__file_name__"] not in existing]
+    if workers <= 1:
+        for sample in pending_samples:
+            record = process_sample(sample)
+            if record is None:
+                continue
+            existing[record["record_key"]] = record
+            with records_path.open("a", encoding="utf-8") as sink:
+                sink.write(json.dumps(record, ensure_ascii=False) + "\n")
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            future_map = {executor.submit(process_sample, sample): sample for sample in pending_samples}
+            for future in as_completed(future_map):
+                record = future.result()
+                if record is None:
+                    continue
+                with write_lock:
+                    existing[record["record_key"]] = record
+                    with records_path.open("a", encoding="utf-8") as sink:
+                        sink.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+    ordered = sorted(existing.values(), key=lambda item: item["line_no"])
+    detected_count = sum(1 for item in ordered if item["pred_fault_detected"])
+    parsed_count = sum(1 for item in ordered if item.get("parsed_response") is not None)
+    step_correct_count = sum(
+        1 for item in ordered
+        if item.get("pred_fault_step") is not None
+        and item.get("gold_fault_step") is not None
+        and int(item["pred_fault_step"]) == int(item["gold_fault_step"])
+    )
+    agent_correct_count = sum(
+        1 for item in ordered
+        if item.get("pred_fault_agent") is not None
+        and item.get("gold_fault_agent") is not None
+        and str(item["pred_fault_agent"]).strip() == str(item["gold_fault_agent"]).strip()
+    )
+    joint_correct_count = sum(
+        1 for item in ordered
+        if item.get("pred_fault_step") is not None
+        and item.get("gold_fault_step") is not None
+        and item.get("pred_fault_agent") is not None
+        and item.get("gold_fault_agent") is not None
+        and int(item["pred_fault_step"]) == int(item["gold_fault_step"])
+        and str(item["pred_fault_agent"]).strip() == str(item["gold_fault_agent"]).strip()
+    )
+    summary = {
+        "dataset": dataset_name,
+        "provider": spec.provider,
+        "model": spec.model,
+        "prompt_kind": prompt_kind,
+        "top_n": top_n,
+        "agent_top_n": agent_top_n,
+        "samples": len(ordered),
+        "pred_fault_detected_count": detected_count,
+        "parsed_count": parsed_count,
+        "parse_failures": sum(1 for item in ordered if item.get("parse_error")),
+        "step_correct_count": step_correct_count,
+        "step_accuracy": (step_correct_count / len(ordered)) if ordered else 0.0,
+        "agent_correct_count": agent_correct_count,
+        "agent_accuracy": (agent_correct_count / len(ordered)) if ordered else 0.0,
+        "joint_correct_count": joint_correct_count,
+        "joint_accuracy": (joint_correct_count / len(ordered)) if ordered else 0.0,
+        "records_path": str(records_path),
+    }
+    summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    return summary
+
+
+def build_task1_combined_summary(dataset_summaries: List[Dict[str, Any]]) -> Dict[str, Any]:
+    total_samples = sum(item["samples"] for item in dataset_summaries)
+    step_correct_total = sum(item["step_correct_count"] for item in dataset_summaries)
+    agent_correct_total = sum(item["agent_correct_count"] for item in dataset_summaries)
+    joint_correct_total = sum(item["joint_correct_count"] for item in dataset_summaries)
+    return {
+        "sample_total": total_samples,
+        "step": {
+            "correct_count": step_correct_total,
+            "micro_accuracy": (step_correct_total / total_samples) if total_samples else 0.0,
+            "macro_accuracy": (sum(item["step_accuracy"] for item in dataset_summaries) / len(dataset_summaries)) if dataset_summaries else 0.0,
+        },
+        "agent": {
+            "correct_count": agent_correct_total,
+            "micro_accuracy": (agent_correct_total / total_samples) if total_samples else 0.0,
+            "macro_accuracy": (sum(item["agent_accuracy"] for item in dataset_summaries) / len(dataset_summaries)) if dataset_summaries else 0.0,
+        },
+        "joint": {
+            "correct_count": joint_correct_total,
+            "micro_accuracy": (joint_correct_total / total_samples) if total_samples else 0.0,
+            "macro_accuracy": (sum(item["joint_accuracy"] for item in dataset_summaries) / len(dataset_summaries)) if dataset_summaries else 0.0,
+        },
+    }
+
+
+def main_task2() -> None:
     parser = argparse.ArgumentParser(description="Run the ASCon-enhanced LLM evaluation for Aegis-Bench Task 2.")
     parser.add_argument("--input_json", type=Path, default=DEFAULT_INPUT_JSON)
     parser.add_argument("--input_pt", type=Path, default=DEFAULT_INPUT_PT)
@@ -537,6 +746,85 @@ def main() -> None:
     output_dir = args.output_dir / args.model
     summary = evaluate_records(rows, auxiliary_profiles, spec, output_dir, workers=args.workers)
     print(json.dumps(summary, ensure_ascii=False, indent=2))
+
+
+def main_task1() -> None:
+    parser = argparse.ArgumentParser(description="Run the ASCon-enhanced LLM evaluation for WhoWhen Task 1.")
+    parser.add_argument("--output-dir", type=Path, default=DEFAULT_TASK1_OUTPUT_DIR)
+    parser.add_argument("--algorithm-dir", type=Path, default=DEFAULT_TASK1_ALGORITHM_DIR)
+    parser.add_argument("--handcrafted-dir", type=Path, default=DEFAULT_TASK1_HANDCRAFT_DIR)
+    parser.add_argument("--algorithm-probs", type=Path, default=DEFAULT_TASK1_ALGORITHM_PROBS)
+    parser.add_argument("--handcrafted-probs", type=Path, default=DEFAULT_TASK1_HANDCRAFT_PROBS)
+    parser.add_argument("--datasets", nargs="*", default=["algorithm", "handcrafted"])
+    parser.add_argument("--models", nargs="*", default=["gpt-4o-mini", "deepseek-v4-pro"])
+    parser.add_argument("--agent-top-n", type=int, default=5)
+    parser.add_argument("--algorithm-top-n", type=int, default=5)
+    parser.add_argument("--handcrafted-top-n", type=int, default=10)
+    parser.add_argument("--prompt-kind", choices=["single", "ascon_SDBL_top", "ascon_llm_prob_history"], default="ascon_llm_prob_history")
+    parser.add_argument("--reference-format", choices=["basic", "ranked", "step_probs"], default="basic")
+    parser.add_argument("--workers", type=int, default=4)
+    parser.add_argument("--include-reference-agents", action=argparse.BooleanOptionalAction, default=True)
+    args = parser.parse_args()
+
+    prompt_kind_map = {
+        "single": "single",
+        "ascon_SDBL_top": "ascon",
+        "ascon_llm_prob_history": "ascon_llm_prob_history",
+    }
+    normalized_prompt_kind = prompt_kind_map[args.prompt_kind]
+
+    ranked_records = load_task1_ranked_prob_records(args.algorithm_probs, args.handcrafted_probs)
+    dataset_dirs = {
+        "algorithm": args.algorithm_dir,
+        "handcrafted": args.handcrafted_dir,
+    }
+    output_dir = args.output_dir
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    root_summary = {"models": []}
+    for model_name in args.models:
+        spec = build_model_spec(model_name)
+        dataset_summaries = []
+        for dataset_name in args.datasets:
+            if dataset_name not in dataset_dirs:
+                raise ValueError(f"Unknown dataset: {dataset_name}")
+            top_n = args.algorithm_top_n if dataset_name == "algorithm" else args.handcrafted_top_n
+            summary = evaluate_task1_dataset(
+                dataset_name=dataset_name,
+                dataset_dir=dataset_dirs[dataset_name],
+                top_n=top_n,
+                agent_top_n=args.agent_top_n,
+                include_agents=args.include_reference_agents,
+                prompt_kind=normalized_prompt_kind,
+                reference_format=args.reference_format,
+                ranked_records=ranked_records,
+                output_dir=output_dir,
+                spec=spec,
+                workers=args.workers,
+            )
+            dataset_summaries.append(summary)
+            print(json.dumps(summary, ensure_ascii=False, indent=2))
+        root_summary["models"].append(
+            {
+                "provider": spec.provider,
+                "model": spec.model,
+                "datasets": dataset_summaries,
+                "combined_summary": build_task1_combined_summary(dataset_summaries),
+            }
+        )
+
+    (output_dir / "summary.json").write_text(json.dumps(root_summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(json.dumps(root_summary, ensure_ascii=False, indent=2))
+
+
+def main() -> None:
+    if len(sys.argv) > 1 and sys.argv[1] == "task1":
+        sys.argv.pop(1)
+        main_task1()
+        return
+    if len(sys.argv) > 1 and sys.argv[1] == "task2":
+        sys.argv.pop(1)
+    main_task2()
 
 
 if __name__ == "__main__":

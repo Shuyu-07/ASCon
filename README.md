@@ -114,7 +114,7 @@ Task 2 results are written under:
 - `ASCon/results/task2_aegis_enhanced_llm/<model>/records.jsonl`
 - `ASCon/results/task2_aegis_enhanced_llm/<model>/summary.json`
 
-## Reference Probability Files
+##📊 Reference Probability Files
 
 We also provide several reference probability samples in:
 
@@ -139,8 +139,8 @@ Our experiments are built upon the following failure-attribution datasets and be
 
 We gratefully acknowledge the authors of these works for providing the datasets used in our experiments.
 
-### Data Availability
-The expanded TracerTraj dataset is not redistributed in this repository, as we do not have permission to publicly redistribute the dataset. Researchers interested in obtaining TracerTraj are kindly referred to the original authors or the official source of the dataset.
+
+(Note: The expanded TracerTraj dataset is not redistributed in this repository, as we do not have permission to publicly redistribute the dataset. Researchers interested in obtaining TracerTraj are kindly referred to the original authors or the official source of the dataset.)
 
 ---
 

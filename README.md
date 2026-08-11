@@ -151,9 +151,9 @@ If you find ASCon useful in your research, please consider citing our paper:
 ```bibtex
 @inproceedings{TODO,
   title     = {ASCon: A Direction-Aware Reciprocal Agent--Step Contextualization Model for Failure Attribution in Multi-Agent Systems},
-  author    = {TODO},
+  author    = {Shuyu Jiang, Yue Ran, Kaiyu Xu, Xingshu Chen, Yi Zhang, Hao Ren, Rui Tang, Tianwei Zhang},
   booktitle = {TODO},
-  year      = {TODO}
+  year      = {2026}
 }
 ```
 

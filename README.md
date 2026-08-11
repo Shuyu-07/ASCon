@@ -7,7 +7,7 @@ ASCon is conducted on the following two representative MAS failure-attribution s
 - **Task 1: root-fault attribution**, which identifies one root responsible agent and one key failure step.
 - **Task 2: failure-mode attribution**, which identifies faulty agents and their corresponding failure modes.
 
-As we do not hold the rights to publicly release the `TracerTraj` dataset, we use Task 2 on Aegis-Bench as the example here to demonstrate how to train and use the ASCon model.
+Here, we use Task 2 on Aegis-Bench as the example here to demonstrate how to train and use the ASCon model.
 
 ### (1) Run the preprocessing script to build encoded `pt` files
 
@@ -125,6 +125,23 @@ For example:
 - `ASCon/FaultProbabilityFile/Task1-WWtest-Algorithm_ranked_probs.json`
 - `ASCon/FaultProbabilityFile/Task1-WWtest-Handcraft_ranked_probs.json`
 - `ASCon/FaultProbabilityFile/Task2-WWtest-Agent-fault-probs.json`
+
+## 📚 Datasets and Acknowledgements
+
+Our experiments are built upon the following failure-attribution datasets and benchmarks. We sincerely thank the authors of these works for making their valuable resources available to the research community.
+
+* **TracerTraj** — introduced in *AgenTracer: Who Is Inducing Failure in the LLM Agentic Systems? (ICLR 2026)*
+
+* **Aegis-Bench** — introduced in *Aegis: Automated Error Generation and Attribution for Multi-Agent Systems (ICLR 2026)*.
+
+* **Who&When** — introduced in *Which Agent Causes Task Failures and When? On Automated Failure Attribution of LLM Multi-Agent Systems (ICML 2025)*.
+
+
+We gratefully acknowledge the authors of these works for providing the datasets used in our experiments.
+
+### Data Availability
+The expanded TracerTraj dataset is not redistributed in this repository, as we do not have permission to publicly redistribute the dataset. Researchers interested in obtaining TracerTraj are kindly referred to the original authors or the official source of the dataset.
+
 ---
 
 ## 📝 Citation

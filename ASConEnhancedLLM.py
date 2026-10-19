@@ -466,7 +466,7 @@ def evaluate_records(
             [
                 {"agent_name": agent_name, "error_type": error_type}
                 for agent_name, error_type in zip(
-                    row.get("mistake_agent", []),
+                    row.get("agent_names", []),
                     row.get("gold_agent_error_type_names", []),
                 )
                 if normalize_error_type(error_type) and normalize_error_type(error_type) != "BENIGN"
@@ -625,7 +625,7 @@ def evaluate_task1_dataset(
             "pred_fault_step": normalized["fault_step"],
             "pred_fault_agent": normalized["fault_agent"],
             "gold_fault_step": parse_optional_int(sample.get("mistake_step")),
-            "gold_fault_agent": None if sample.get("mistake_agent") is None else str(sample.get("mistake_agent")),
+            "gold_fault_agent": None if sample.get("agent_names") is None else str(sample.get("agent_names")),
             "parse_error": parse_error,
         }
 
